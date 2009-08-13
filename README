@@ -1,2 +1,4 @@
 This is a radmind running wrapper script inspired by Greg Neagle's run_radmind.pl and its ancestors
 
+The primary new feature of this script is an implementation of a method to allow the client to select the command file to use, replacing the assignment that normally occurs through the server's config file.
+
