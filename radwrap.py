@@ -283,7 +283,7 @@ def main(argv=None):
             # check for a host specific command file
             host = re.sub('\.local$','',os.uname()[1])
             if host in directives:
-                options.command_file = search_file (directives[host])
+                options.command_file = directives[host]
             else:
                 candidate = os.path.join('/var/radmind/client',host.lower() + ".K")
                 options.command_file = search_file(candidate)
@@ -291,7 +291,7 @@ def main(argv=None):
             # check for HW address based command file
             hw_address = sh ('ifconfig en0 | awk \'/ether/ { gsub(":", ""); print $2 }\'')
             if hw_address in directives:
-                options.command_file = search_file (directives[hw_address])
+                options.command_file = directives[hw_address]
             else:
                 candidate = os.path.join('/var/radmind/client',hw_address.strip() + ".K")
                 options.command_file = search_file(candidate)
@@ -299,7 +299,7 @@ def main(argv=None):
             # check for a machine_type specific command file
             machine_type = sh("system_profiler SPHardwareDataType | grep 'Model Name' | awk '{print $3}'")
             if machine_type in directives:
-                options.command_file = search_file (directives[machine_type])
+                options.command_file = directives[machine_type]
             else:
                 candidate = os.path.join('/var/radmind/client',machine_type.lower().strip() + ".K")
                 options.command_file = search_file(candidate)
