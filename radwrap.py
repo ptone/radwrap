@@ -120,12 +120,26 @@ def get_logger():
     
 def search_file (value,rad_dir='/var/radmind/client/'):
     if os.path.exists(value):
-        return value
+        return os.path.abspath(value)
     elif os.path.exists(os.path.join(rad_dir,value)):
         return os.path.join(rad_dir,value)
     elif os.path.exists(os.path.join(rad_dir,value + ".K")):
         return os.path.join(rad_dir,value + ".K")
     return False
+    
+def get_directives(index_name='index'):
+    directives = {}
+    index_file = search_file (index_name)
+    # looks for lines like:
+    # #radwrap foo some.K
+    if index_file:
+        for line in open(index_file):
+            if line[0:8].lower() == "#radwrap":
+                k,v = line.strip().split()[1:]
+                f = search_file (v)
+                if f:
+                    directives[k] = f
+    return directives
     
 def main(argv=None):
     config = Config()
@@ -254,13 +268,8 @@ def main(argv=None):
 
         # Verify command file passed in args
         if options.command_file:
-            if os.path.exists(options.command_file):
-                options.command_file = os.path.abspath(options.command_file)
-            elif os.path.exists(os.path.join('/var/radmind/client',options.command_file)):
-                options.command_file = os.path.join('/var/radmind/client',options.command_file)
-            elif os.path.exists(os.path.join('/var/radmind/client/',options.command_file + ".K")):
-                options.command_file = os.path.join('/var/radmind/client',options.command_file + ".K")
-            else:
+            options.command_file = search_file (options.command_file)
+            if not options.command_file:
                 raise Usage('specified command not found - leave off for default/auto')
         # if no command file arg - options.command_file will be false - use several methods to find one
         # @@ should use a list of callables
@@ -270,20 +279,30 @@ def main(argv=None):
             if 'radwrap' in config:
                 options.command_file = search_file(config.radwrap)
         if not options.command_file:
+            directives = get_directives()
             # check for a host specific command file
             host = re.sub('\.local$','',os.uname()[1])
-            candidate = os.path.join('/var/radmind/client',host.lower() + ".K")
-            options.command_file = search_file(candidate)
+            if host in directives:
+                options.command_file = search_file (directives[host])
+            else:
+                candidate = os.path.join('/var/radmind/client',host.lower() + ".K")
+                options.command_file = search_file(candidate)
         if not options.command_file:
             # check for HW address based command file
             hw_address = sh ('ifconfig en0 | awk \'/ether/ { gsub(":", ""); print $2 }\'')
-            candidate = os.path.join('/var/radmind/client',hw_address.strip() + ".K")
-            options.command_file = search_file(candidate)
+            if hw_address in directives:
+                options.command_file = search_file (directives[hw_address])
+            else:
+                candidate = os.path.join('/var/radmind/client',hw_address.strip() + ".K")
+                options.command_file = search_file(candidate)
         if not options.command_file:
             # check for a machine_type specific command file
             machine_type = sh("system_profiler SPHardwareDataType | grep 'Model Name' | awk '{print $3}'")
-            candidate = os.path.join('/var/radmind/client',machine_type.lower().strip() + ".K")
-            options.command_file = search_file(candidate)
+            if machine_type in directives:
+                options.command_file = search_file (directives[machine_type])
+            else:
+                candidate = os.path.join('/var/radmind/client',machine_type.lower().strip() + ".K")
+                options.command_file = search_file(candidate)
         if not options.command_file:
             # see if default file exists
             options.command_file = search_file(default_command)
