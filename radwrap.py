@@ -131,7 +131,7 @@ def search_file (value,rad_dir='/var/radmind/client/'):
         return os.path.join(rad_dir,value + ".K")
     return False
     
-def get_directives(index_name='index'):
+def get_directives(index_name='command'):
     directives = {}
     index_file = search_file (index_name)
     # looks for lines like:
