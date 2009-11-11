@@ -59,8 +59,12 @@ class Config(dict):
         }
         configparser = ConfigParser.SafeConfigParser(base_defaults)
         configparser.read(config_paths)
-        base_defaults.update(dict(configparser.items('radutil')))
-        base_defaults['default_k_excludes'] = base_defaults['default_k_excludes'].split()
+        try:
+            base_defaults.update(dict(configparser.items('radutil')))
+        except ConfigParser.NoSectionError:
+            pass
+        if 'default_k_excludes' in base_defaults:
+            base_defaults['default_k_excludes'] = base_defaults['default_k_excludes'].split()
         dict.__init__(self, base_defaults)
         self.__initialised = True
         # after initialisation, setting attributes is the same as setting an item
@@ -203,7 +207,7 @@ def main(argv=None):
         if not options.use_ihook:
             # this is a bit hackish, as there is no good way to address a already attached handler
             # basically what this does is allow all logs to flow to stdout if ihook is not being used
-            logger.handler[1].setLevel(logging.DEBUG)
+            logger.handlers[1].setLevel(logging.DEBUG)
         
         default_command = 'default.K'
 
