@@ -19,7 +19,7 @@ do I have the radmind options for covered?
 import sys
 import os
 import tempfile
-import logging
+import logging, logging.handlers
 # import getopt
 from optparse import OptionParser,OptionGroup
 from subprocess import Popen, PIPE,call
@@ -28,8 +28,63 @@ import re
 import shutil
 
 
-
+LOGLEVELS = {'debug': logging.DEBUG,
+          'info': logging.INFO,
+          'warning': logging.WARNING,
+          'error': logging.ERROR,
+          'critical': logging.CRITICAL}
+          
 os.environ['PATH'] = '/bin:/usr/bin:/usr/local/bin:/sbin:/usr/sbin'
+
+
+class Config(dict):
+    """Example of overloading __getatr__ and __setattr__
+    This example creates a dictionary where members can be accessed as attributes
+    """
+    def __init__(self):
+        import ConfigParser
+        config_paths = (
+            '/etc/radutil.cfg',
+            '/usr/local/etc/radutil.cfg',
+            '/Library/Preferences/radutil.cfg',
+        )
+        base_defaults = {
+            'rad_dir':'/var/radmind/',
+            'default_k_excludes': '',
+            'case_sensitive': False,
+            'checksum': 'sha1',
+            'fsdiffpath': '.',
+            'server': 'radmind',
+            'port': '6222',
+        }
+        configparser = ConfigParser.SafeConfigParser(base_defaults)
+        configparser.read(config_paths)
+        base_defaults.update(dict(configparser.items('radutil')))
+        base_defaults['default_k_excludes'] = base_defaults['default_k_excludes'].split()
+        dict.__init__(self, base_defaults)
+        self.__initialised = True
+        # after initialisation, setting attributes is the same as setting an item
+
+    def __getattr__(self, item):
+        """Maps values to attributes.
+        Only called if there *isn't* an attribute with this name
+        """
+        try:
+            return self.__getitem__(item)
+        except KeyError:
+            raise AttributeError(item)
+
+    def __setattr__(self, item, value):
+        """Maps attributes to values.
+        Only if we are initialised
+        """
+        if not self.__dict__.has_key('_attrExample__initialised'):  # this test allows attributes to be set in the __init__ method
+            return dict.__setattr__(self, item, value)
+        elif self.__dict__.has_key(item):       # any normal attributes are handled normally
+            dict.__setattr__(self, item, value)
+        else:
+            self.__setitem__(item, value)
+
 
 class Usage(Exception):
     def __init__(self, msg):
@@ -49,15 +104,38 @@ def uniq(the_list):
             d[x]=x
     return d.values()
 
+def get_logger():
+    logger = logging.Logger('radwrap')
+    h = logging.handlers.RotatingFileHandler('/var/log/radmindWrapper.log',maxBytes=50000,backupCount=5)
+    f = logging.Formatter("%(asctime)s " + \
+        "%(levelname)s\t%(message)s")
+    h.setFormatter (f)
+    h.setLevel (logging.DEBUG)
+    logger.addHandler(h)
+    sh = logging.StreamHandler(sys.stdout)
+    # use of debug level is for console printing - used to show or hide non-ihook friendly messages
+    sh.setLevel (logging.INFO)
+    logger.addHandler(sh)
+    return logger
+    
+def search_file (value,rad_dir='/var/radmind/client/'):
+    if os.path.exists(value):
+        return value
+    elif os.path.exists(os.path.join(rad_dir,value)):
+        return os.path.join(rad_dir,value)
+    elif os.path.exists(os.path.join(rad_dir,value + ".K")):
+        return os.path.join(rad_dir,value + ".K")
+    return False
     
 def main(argv=None):
+    config = Config()
+    logger = get_logger()
+    
     if argv is None:
         argv = sys.argv
     try:
-        # logging.basicConfig(filename=log_filename,level=logging.DEBUG,)
-
         #settings
-        log_filename = '/var/log/radmindWrapper.log'
+        
         temp_dir = os.path.join(tempfile.gettempdir(),'radwrap')
         tools_dir = os.path.join(temp_dir,'tools')
         applicable_transcript = os.path.join(temp_dir,'applicable.T')
@@ -68,14 +146,14 @@ def main(argv=None):
         # ,'/usr/sbin/bless' - doesn't work from inside chroot
         tools_needed = ['/bin/sh', '/sbin/reboot','/sbin/halt'] 
         pre_update_dirs = ('/usr/local/bin', '/Library/Management')
-        radmind_server = 'radmind.sanroque.net'
+        radmind_server = config.server
         ihook_image_directory = '/Network/Library/management08/radmind/images/'
-        radmind_port = 6222
-        radmind_comparison_path = '.'
+        radmind_port = config.port
+        radmind_comparison_path = config.fsdiffpath
         ktcheck_flags = [   '-C', 
-                            '-c', 'sha1', 
-                            '-h', radmind_server, 
-                            '-p', str(radmind_port)]
+                            '-c', config.checksum, 
+                            '-h', config.server, 
+                            '-p', config.port]
                             
         fsdiff_flags = [    '-A',
                             '-I', 
@@ -87,8 +165,8 @@ def main(argv=None):
                             '-C', 
                             '-i', 
                             '-%', 
-                            '-h',radmind_server, 
-                            '-p',str(radmind_port), 
+                            '-h',config.server, 
+                            '-p',config.port, 
                             applicable_transcript]
                             
         
@@ -107,6 +185,11 @@ def main(argv=None):
         # todo:
         # parser.usage =
         (options, args) = parser.parse_args()
+        
+        if not options.use_ihook:
+            # this is a bit hackish, as there is no good way to address a already attached handler
+            # basically what this does is allow all logs to flow to stdout if ihook is not being used
+            logger.handler[1].setLevel(logging.DEBUG)
         
         default_command = 'default.K'
 
@@ -135,11 +218,12 @@ def main(argv=None):
         try: 
             os.makedirs(tools_dir)
         except:
-            # todo:  test whether error is because already exists
+            # @@ todo:  test whether error is because already exists
             raise
         
         os.chdir(radmind_root)
         #disable sleep
+        # @@ need to reset at end - or is it reset at reboot?
         sh('pmset sleep 0')
         # todo:  disable spotlight and time machine during lapply
         
@@ -150,17 +234,21 @@ def main(argv=None):
             print '%BEGINPOLE'
             print '%BACKGROUND ' + os.path.join(ihook_image_directory,'ktcheck.tif')
             ktcheck_flags.append('-q')
-        print 'Checking for changes from server'
+        logger.info( 'Checking for changes from server')
+        # we need to check first because this fetches a potential matching K file that wasn't
+        # already on the client
+        
         # print ktcheck_flags
         return_value = call(['ktcheck'] + ktcheck_flags)
         # return_value = call(['ktcheck'] + ktcheck_flags,shell=True)
         if return_value > 1:
+            logger.error('ktcheck returned %s, exiting' % return_value)
             raise RadmindError, 'ktcheck returned %s' % return_value
         if return_value == 1:
-            print "Updates were found"
+            logger.info( "Updates were found")
             # todo: rename command.K to avoid any inadvetant usage of index.K ?
         else:
-            print "No Updates found"
+            logger.info( "No Updates found")
         if options.use_ihook: print '%ENDPOLE'
         
 
@@ -175,50 +263,43 @@ def main(argv=None):
             else:
                 raise Usage('specified command not found - leave off for default/auto')
         # if no command file arg - options.command_file will be false - use several methods to find one
+        # @@ should use a list of callables
         if not options.command_file:
             # check for local settings file
-            config = '/Library/Management/radmind-config'
-            if os.path.exists(config):
-                value =  open(config).read().strip()
-                if os.path.exists(value):
-                    options.command_file = value
-                elif os.path.exists(os.path.join('/var/radmind/client/',value)):
-                    options.command_file = os.path.join('/var/radmind/client/',value)
-                elif os.path.exists(os.path.join('/var/radmind/client/',value + ".K")):
-                    options.command_file = os.path.join('/var/radmind/client/',value + ".K")
+            # @@ need to merge with config object above
+            if 'radwrap' in config:
+                options.command_file = search_file(config.radwrap)
         if not options.command_file:
             # check for a host specific command file
             host = re.sub('\.local$','',os.uname()[1])
             candidate = os.path.join('/var/radmind/client',host.lower() + ".K")
-            if os.path.exists(candidate):
-                options.command_file = candidate
+            options.command_file = search_file(candidate)
         if not options.command_file:
             # check for HW address based command file
             hw_address = sh ('ifconfig en0 | awk \'/ether/ { gsub(":", ""); print $2 }\'')
             candidate = os.path.join('/var/radmind/client',hw_address.strip() + ".K")
-            if os.path.exists(candidate):
-                options.command_file = candidate
+            options.command_file = search_file(candidate)
         if not options.command_file:
             # check for a machine_type specific command file
             machine_type = sh("system_profiler SPHardwareDataType | grep 'Model Name' | awk '{print $3}'")
             candidate = os.path.join('/var/radmind/client',machine_type.lower().strip() + ".K")
-            if os.path.exists(candidate):
-                options.command_file = candidate
+            options.command_file = search_file(candidate)
         if not options.command_file:
             # see if default file exists
-            if os.path.exists(default_command):
-                options.command_file = default_command
-            elif os.path.exists(os.path.join('var/radmind/client',default_command)):
-                options.command_file = os.path.join('var/radmind/client',default_command)
-            else:
-                raise RuntimeError('a suitable command file could not be located')
-        # todo: could add a default read to check another location
-        if not options.use_ihook:
-            print "using command file: " + options.command_file
+            options.command_file = search_file(default_command)
+            if not options.command_file:
+                logger.error('a suitable command file could not be located')
+                sys.exit(1)
+        # @@ add feature to allow index.K contain quoted lines like:
+        #radwrap hostname some_specific.K
+        
+
+        logger.debug("using command file: " + options.command_file)
 
         #check pre_update directories
         for comp_path in pre_update_dirs:
             pass
+            # this is a stub of a step from the perl version that is not implemented here
             # return_value = sh('fsdiff %s %s' % (fsdiff_flags,comp_path))
             # todo:  check to see if this script is being replaced - and respawn
             # in author's environment, it is a network hosted script
@@ -233,7 +314,11 @@ def main(argv=None):
                 links_to_create[os.path.basename(binary)] = os.path.basename(dest)
                 if not dest in tools_needed: tools_needed.append(dest)
             # check for dynamically loaded lib dependencies, and load them into the correct relative path
-            sh_output = sh("otool -L %s" % binary)
+            try:
+                sh_output = sh("otool -L %s" % binary)
+            except:
+                logger.error ("Could not run otool - is it installed properly?")
+                sys.exit()
             for line in sh_output.split('\n')[1:]:
                 #skip first header line of otool output that begins with binary
                 dependency = re.findall('^\s*([^ ]*)',line)[0] # the first item on the line minus any leading whitespace
@@ -245,9 +330,8 @@ def main(argv=None):
         tools_needed = [re.sub('(?<=\.framework).*','',t) for t in tools_needed]
         # remove any duplicate frameworks
         tools_needed = uniq (tools_needed)
-        if not options.use_ihook:
-            print "final list of tools needed:"
-            print tools_needed
+        logger.debug( "final list of tools needed:")
+        map (logger.debug, tools_needed) 
 
         clear_ls_cache = False
         clear_components_cache = False
@@ -258,14 +342,13 @@ def main(argv=None):
         if options.use_ihook:
             print "%ENDPOLE"
             print '%BACKGROUND ' + os.path.join(ihook_image_directory,'fsdiff.tif')
-        print "Scanning File System for changes"
-        return_value = call(['fsdiff'] + fsdiff_flags + ['-K',options.command_file] + [radmind_comparison_path])
-        # todo: check return value and bail if needed        
-
-        if not options.use_ihook:
-            print "checking whether critical tools are being replaced"
-        f = open(applicable_transcript)
-        for line in f:
+        logger.info( "Scanning File System for changes")
+        return_code = call(['fsdiff'] + fsdiff_flags + ['-K',options.command_file] + [radmind_comparison_path])
+        if return_code:
+            logger.error ("fsdiff failed with return value: %s" % return_code)
+            sys.exit(return_code)
+        logger.debug( "checking whether critical tools are being replaced")
+        for line in open(applicable_transcript):
             # pre-compiling patterns not really needed since re module caches patterns for you
             if re.search('com\.apple\.LaunchServices',line): clear_ls_cache = True
             if re.search('System/Library/(Components|QuickTime)',line): clear_components_cache = True
@@ -275,28 +358,32 @@ def main(argv=None):
                 if tool not in tools_copied:                    
                     if re.search(re.escape(tool),line):
                         return_code = call('ditto %s %s' % (tool, os.path.join(tools_dir,tool.lstrip('/'))),shell=True)
-                        # todo:  if return code not 0 raise error
+                        if return_code:
+                            logger.error ("ditto failed with return value: %s for: %s" % (return_code,tool))
+                            sys.exit(return_code)
                         tools_copied.append(tool)
                         if os.path.abspath(radmind_root) == "/":
                             options.reboot_after = True
-        f.close()
 
         if (clear_ls_cache or rebuild_kernel_caches or dyld_being_replaced or tools_copied) and \
             os.path.abspath(radmind_root) == "/":
             options.reboot_after = True
-        if not options.use_ihook:
-            print 'tools copied so far:'
-            print tools_copied
+        logger.debug( 'tools copied so far:')
+        map (logger.debug,tools_copied)
         
         if dyld_being_replaced:
             return_code = call('ditto %s %s' % (dyld_path,os.path.join(tools_dir,dyld_path.lstrip('/'))),shell=True)
-            # todo:  if return code not 0 raise error
+            if return_code:
+                logger.error ("ditto failed with return value: %s for: %s" % (return_code,tool))
+                sys.exit(return_code)            
             # Copy any tool that wasn't already copied
             for tool in tools_needed:
                 if tool not in tools_copied:
-                    print 'copy ' + tool
+                    logger.debug( 'copy ' + tool)
                     return_code = call('ditto %s %s' % (tool, os.path.join(tools_dir,tool.lstrip('/'))),shell=True)
-                    # todo:  if return code not 0 raise error
+                    if return_code:
+                        logger.error ("ditto failed with return value: %s for: %s" % (return_code,tool))
+                        sys.exit(return_code)
 
         # Embedded frameworks won't be found by dyld unless they are linked to TOOL_DIR
         for item in os.listdir(tools_dir):
@@ -305,13 +392,13 @@ def main(argv=None):
                     os.symlink(sub,os.path.join(tools_dir,os.path.basename(sub)))
 
         # # Make sure libraries can be found by any install name
+        # not implemented - no needed
         # foreach my $binary (keys %links_to_create) {
         #     -e "$TOOL_DIR/$links_to_create{$binary}" and symlink "$links_to_create{$binary}", "$TOOL_DIR/$binary";
         # }
         # create tools copies of linked binaries line 329 from commented wrapper
         # not sure why wouldn't do this when probing links..
-        if not options.use_ihook:
-            print " Finished copying tools"
+        logger.debug( " Finished copying tools")
         
         # could put this before lapply, or after chroot (would need to add to required tools list)...
         # if the path is in a positive, the touch may be reversed?
@@ -323,17 +410,18 @@ def main(argv=None):
         if options.use_ihook:
             print "%ENDPOLE"
             print '%BACKGROUND ' + os.path.join(ihook_image_directory,'lapply.tif')
-        print "Applying system updates..."
-        return_value = call(['lapply'] + lapply_flags)
-        
+        logger.info( "Applying system updates...")
+        return_code = call(['lapply'] + lapply_flags)
+
         if options.use_ihook: print "%ENDPOLE"
 
-        if return_value != 0:
-            # lapply failed
-            # todo:  raise exception or log
-            pass
+        if return_code:
+            codes = ('','An error occurred, system was modiﬁed.','An error occurred, system was not modiﬁed.')
+            logger.error (codes[return_code])
+            sys.exit(return_code)
+
     
-        print "Post Update Actions"
+        logger.info( "Post Update Actions")
         if clear_ls_cache:
             map(os.remove,glob('Library/Caches/com.apple.LaunchServices*'))
         if clear_components_cache:
@@ -352,15 +440,11 @@ def main(argv=None):
             # os.environ['PATH'] = os.environ['DYLD_LIBRARY_PATH'] = os.environ['DYLD_FRAMEWORK_PATH'] = '/'
 
         # todo:  post install actions set up as a one time startup item
-        
-        # bless the boot target:
-        # todo - should the setboot part be an option?
-        # boot_loc = os.path.join(radmind_root,'System/Library/CoreServices/')
-        # bless_cmd = ['bless','--folder', boot_loc, '--bootefi', '--bootinfo', '--setBoot']
-        # print bless_cmd
-        # call(bless_cmd)
+            # bless boot target
+            
         
         if options.reboot_after:
+            # @@ allow an option for whether to restart or shutdown
             print 'restarting now'
             call("reboot")
             
@@ -372,6 +456,7 @@ def main(argv=None):
         print >> sys.stderr, "\t for help use --help"
         return 2
     except RadmindError, msg:
+        # @@ really not sure I need the outer try - need to focus try blocks in code better
         sys.stderr.write(str(msg))
 if __name__ == '__main__':
     main()
