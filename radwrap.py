@@ -248,7 +248,7 @@ def main(argv=None):
         os.chdir(radmind_root)
         #disable sleep
         # @@ need to reset at end - or is it reset at reboot?
-        sh('pmset sleep 0')
+        # sh('pmset sleep 0')
         # todo:  disable spotlight and time machine during lapply
         
         if options.use_ihook: 
@@ -285,7 +285,6 @@ def main(argv=None):
         # @@ should use a list of callables
         if not options.command_file:
             # check for local settings file
-            # @@ need to merge with config object above
             if 'radwrap' in config:
                 options.command_file = search_file(config.radwrap)
         if not options.command_file:
@@ -362,6 +361,7 @@ def main(argv=None):
             logger.error ("fsdiff failed with return value: %s" % return_code)
             sys.exit(return_code)
         logger.debug( "checking whether critical tools are being replaced")
+        # @@ this may be a lot of work to avoid a reboot - maybe just make reboots mandatory...?
         for line in open(applicable_transcript):
             # pre-compiling patterns not really needed since re module caches patterns for you
             if re.search('com\.apple\.LaunchServices',line): clear_ls_cache = True
