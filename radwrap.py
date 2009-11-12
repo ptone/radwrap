@@ -144,7 +144,13 @@ def get_directives(index_name='command'):
                 if f:
                     directives[k] = f
     return directives
-    
+
+def select_command_file(value, directives, rad_dir='/var/radmind/client/'):
+    if value in directives:
+        return directives[value]
+    else:
+        return search_file(value)
+
 def main(argv=None):
     config = Config()
     logger = get_logger()
@@ -285,38 +291,23 @@ def main(argv=None):
         if not options.command_file:
             directives = get_directives()
             # check for a host specific command file
-            host = re.sub('\.local$','',os.uname()[1])
-            if host in directives:
-                options.command_file = directives[host]
-            else:
-                candidate = os.path.join('/var/radmind/client',host.lower() + ".K")
-                options.command_file = search_file(candidate)
+            host = re.sub('\.local$','',os.uname()[1]).lower()
+            options.command_file = select_command_file (host,directives)
         if not options.command_file:
             # check for HW address based command file
-            hw_address = sh ('ifconfig en0 | awk \'/ether/ { gsub(":", ""); print $2 }\'')
-            if hw_address in directives:
-                options.command_file = directives[hw_address]
-            else:
-                candidate = os.path.join('/var/radmind/client',hw_address.strip() + ".K")
-                options.command_file = search_file(candidate)
+            hw_address = sh ('ifconfig en0 | awk \'/ether/ { gsub(":", ""); print $2 }\'').strip()
+            options.command_file = select_command_file (hw_address,directives)
         if not options.command_file:
             # check for a machine_type specific command file
-            machine_type = sh("system_profiler SPHardwareDataType | grep 'Model Name' | awk '{print $3}'")
-            if machine_type in directives:
-                options.command_file = directives[machine_type]
-            else:
-                candidate = os.path.join('/var/radmind/client',machine_type.lower().strip() + ".K")
-                options.command_file = search_file(candidate)
+            machine_type = sh("system_profiler SPHardwareDataType | grep 'Model Name' | awk '{print $3}'").lower().strip()
+            options.command_file = select_command_file (machine_type,directives)
         if not options.command_file:
             # see if default file exists
             options.command_file = search_file(default_command)
             if not options.command_file:
                 logger.error('a suitable command file could not be located')
                 sys.exit(1)
-        # @@ add feature to allow index.K contain quoted lines like:
-        #radwrap hostname some_specific.K
         
-
         logger.debug("using command file: " + options.command_file)
 
         #check pre_update directories
