@@ -2,3 +2,140 @@ This is a radmind running wrapper script inspired by Greg Neagle's run_radmind.p
 
 The primary new feature of this script is an implementation of a method to allow the client to select the command file to use, replacing the assignment that normally occurs through the server's config file.
 
+# Why run radmind through a wrapper?
+
+The primary reason wrappers became important beyond pre and post radmind actions, was the issue with replacing critical system libraries with an loadset that then rendered the system unable to reboot properly.  Basically the system calls involved in rebooting would try to load libraries for a new kernel, but the old kernel was still loaded.  So machines would fail to reboot.
+
+This tool implements a somewhat simplified python version of the approaches originally coded in perl.
+
+# Is that all?
+
+However this tool does a bit more than just wrap radmind this way - one of its main design goals was to come up with a way of doing client side command file selection and discovery.
+
+The normal way radmind specifies which machines use what command (.K) file is on the server's config file.  This is usually either done by IP address (requires static IP addresses on clients) or certs (a bit more complicated to set up, and not easily swapped around from the server side of things).
+
+The approach taken here is to use the KinK method, where K files can be nested within each other, and use that to deliver multiple possible command files to the client, and then have the client select between them.
+
+A file on the server is created in the /var/radmind/command directory called "index.K".  This file simply lists a number of K files, each of which is capable of being used as a root command file on the client.  In other words - each line of the index.K file, would be a command file normally listed in the config file - you can think of this index.K file as a config delivered to the client.
+
+In the server's config file, you can assign this index.K to all clients (*), or a subset of clients if you want to test this out or use this approach with a limited group of machines.
+
+On the client, a call to ktcheck will pull index.K from the server into command.K on the client - and will also pull down all K files listed (and all transcript files - see below)
+
+Now this command.K file WILL NOT WORK with the radmind tools using default options (references multiple duplicate K files).  The radmind tools must be passed the -K flag with one of the downloaded K files.
+
+The radwrap.py script handles both the selection of which one to use, plus the running of the radmind tools with that file.
+
+Selecting which command file to use proceeds as follows:
+    1) identifier passed as a parameter on the command line to radwrap.py
+    2) identifier specified in a config file (to be documented....)
+    3) identifier based on host name
+    4) identifier based on HW MAC address (en0)
+    5) identifier based on machine type (system_profiler SPHardwareDataType | grep 'Model Name' | awk '{print $3}')
+    6) a default command file named default.K (would usually be your basic client loadset)
+    
+An identifier can be one of (in order of precedence):
+    a full path to a command file
+    a name of command file with .K extension
+    a name of command file without extension
+    
+So if the client is named myhost, or has a ethernet address of 002332ce9208 and finds a matching file (002332ce9208.K or myhost.K)it will use that file as the command file for any fsdiff operations.
+
+Another example if there is a command file called macbook.K - then any macbook that doesn't find a higher priority identifier will use that command file.
+
+# Directives:
+
+In addition to command files being named after an identifier - directives can be put directly in the index.K file.
+
+A directive is a specially formated line of the following syntax:
+
+`#radwrap <machine identifier> <command file>`
+
+Here the machine identifier can be any of hostname/HW address/Machine Type - and the command file can be the path or name of command file with or without extension
+
+So if you had a command file in the collection named videoeditor.K you could have a directive in the index.K file like:
+
+`#radwrap 002332ce9208 videoeditor`
+
+This allows you to specify machine specific command files, without having duplicate command files with the only difference being the name.
+
+# Other points:
+
+## Logging :
+/var/log/radmindWrapper.log
+
+## Concerns over extra load during ktcheck:
+Using this system, every command file and every transcript gets pulled to every client using this system. For some this may be seem like too much, or wasteful.  But in the vast majority of situations, the shared base loads represent the bulk of the data in any given loadset.
+
+## Post radmind actions:
+In order to reboot after any update, a very minimal environment is "preserved" to reboot which does not allow for many post radmind actions.  I've found the best way to handle these is with a post_radmind launchd item that is included in the loadset that runs on first boot and then deletes itself.  This launchd loadset can do things like explicitly bless the current boot volume, set hostname based on some external file, etc.
+
+## Integration with imaging:
+What I have set up in our environment is a custom netinstall image, that includes a startup item to run radwrap on boot - this then updates the machine with radmind and reboots again.  It allows one touch imaging (base image) combined with the easy to deploy diversity of radmind.
+
+## Running at loginwindow:
+You can create a simple shell script that can be called from a launchd item with a loginwindow session type.
+
+the ihook wrapper might look like:
+
+/Applications/Utilities/iHook.app/Contents/MacOS/iHook --no-titlebar --script=/path/to/radwrap.py -i /
+
+The launchd plist might be:
+
+    <?xml version="1.0" encoding="UTF-8"?>
+    <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+    <plist version="1.0">
+    <dict>
+            <key>Debug</key>
+            <true/>
+            <key>Label</key>
+            <string>edu.umich.ihook.loginwindow</string>
+            <key>LimitLoadToSessionType</key>
+            <array>
+                    <string>LoginWindow</string>
+            </array>
+            <key>ProgramArguments</key>
+            <array>
+                    <string>/path/to/ihook/wrapper</string>
+            </array>
+            <key>RunAtLoad</key>
+            <false/>
+            <key>StartCalendarInterval</key>
+            <dict>
+                    <key>Hour</key>
+                    <integer>3</integer>
+                    <key>Minute</key>
+                    <integer>30</integer>
+            </dict>
+    </dict>
+    </plist>
+
+To run at the loginwindow with ihook image backgrounds (I use the ones from Greg's original distribution) you will need to set the ihook_image_directory variable in the source and provide images named:
+ktcheck.tif
+fsdiff.tif
+lapply.tif
+
+Comments, questions, bug reports, enhancement ideas welcome.
+
+Created by Preston Holmes on 2009-11-11.
+preston@ptone.com
+Copyright (c) 2009
+
+Permission is hereby granted, free of charge, to any person obtaining
+a copy of this software and associated documentation files (the
+"Software"), to deal in the Software without restriction, including
+without limitation the rights to use, copy, modify, merge, publish,
+distribute, sublicense, and/or sell copies of the Software, and to
+permit persons to whom the Software is furnished to do so, subject to
+the following conditions:
+
+The above copyright notice and this permission notice shall be included
+in all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
+EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
+MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.
+IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY
+CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT,
+TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE
+SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
