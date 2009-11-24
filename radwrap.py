@@ -205,7 +205,7 @@ def main(argv=None):
                             help = "if no-system files are modified - skip reboot")
         parser.add_option ('-K','--command-file', help = "specify command file to use", metavar = "PATH OR NAME")
         # parser.add_option ("-c","--config"
-        
+        # @@ need an option to use -c checksums with fsdiff
         # todo:
         # parser.usage =
         (options, args) = parser.parse_args()
