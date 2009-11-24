@@ -142,14 +142,14 @@ def get_directives(index_name='command'):
                 k,v = line.strip().split()[1:]
                 f = search_file (v)
                 if f:
-                    directives[k] = f
+                    directives[k.lower()] = f
     return directives
 
-def select_command_file(value, directives, rad_dir='/var/radmind/client/'):
-    if value in directives:
-        return directives[value]
+def select_command_file(key, directives, rad_dir='/var/radmind/client/'):
+    if key.lower() in directives:
+        return directives[key]
     else:
-        return search_file(value)
+        return search_file(key)
 
 def main(argv=None):
     config = Config()
